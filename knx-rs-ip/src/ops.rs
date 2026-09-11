@@ -48,8 +48,13 @@ pub trait GroupOps: KnxConnection {
     /// # Errors
     ///
     /// Returns [`KnxIpError`](crate::KnxIpError) if the frame could not be sent.
-    fn group_write(&self, ga: GroupAddress, data: &[u8]) -> KnxFuture<'_, Result<()>> {
-        let frame = match build_group_write(ga, data) {
+    fn group_write(
+        &self,
+        ga: GroupAddress,
+        short_apdu: bool,
+        data: &[u8],
+    ) -> KnxFuture<'_, Result<()>> {
+        let frame = match build_group_write(ga, short_apdu, data) {
             Ok(frame) => frame,
             Err(err) => return Box::pin(core::future::ready(Err(err))),
         };
@@ -71,7 +76,7 @@ pub trait GroupOps: KnxConnection {
             Ok(encoded) => encoded,
             Err(err) => return Box::pin(core::future::ready(Err(err.into()))),
         };
-        let frame = match build_group_write(ga, &encoded) {
+        let frame = match build_group_write(ga, dpt.short_apdu(), &encoded) {
             Ok(frame) => frame,
             Err(err) => return Box::pin(core::future::ready(Err(err))),
         };
@@ -98,8 +103,13 @@ pub trait GroupOps: KnxConnection {
     /// # Errors
     ///
     /// Returns [`KnxIpError`](crate::KnxIpError) if the frame could not be sent.
-    fn group_respond(&self, ga: GroupAddress, data: &[u8]) -> KnxFuture<'_, Result<()>> {
-        let frame = match build_group_response(ga, data) {
+    fn group_respond(
+        &self,
+        ga: GroupAddress,
+        short_apdu: bool,
+        data: &[u8],
+    ) -> KnxFuture<'_, Result<()>> {
+        let frame = match build_group_response(ga, short_apdu, data) {
             Ok(frame) => frame,
             Err(err) => return Box::pin(core::future::ready(Err(err))),
         };
@@ -117,12 +127,17 @@ impl<T: KnxConnection> GroupOps for T {}
 /// APDU encoding (short/long form, APCI bytes) is delegated to
 /// [`knx_rs_core::apdu::Apdu`] so opcodes and the short-form rule live in one
 /// place; the source address is left zero for the gateway to fill in.
-fn build_group_frame(ga: GroupAddress, apdu_type: ApduType, data: &[u8]) -> Result<CemiFrame> {
+fn build_group_frame(
+    ga: GroupAddress,
+    apdu_type: ApduType,
+    short_apdu: bool,
+    data: &[u8],
+) -> Result<CemiFrame> {
     let apdu = Apdu {
         apdu_type,
         data: data.to_vec(),
     };
-    let payload = apdu.to_bytes(TPCI_DATA_GROUP);
+    let payload = apdu.to_bytes(TPCI_DATA_GROUP, short_apdu);
     Ok(CemiFrame::try_new_l_data(
         MessageCode::LDataReq,
         IndividualAddress::from_raw(0x0000),
@@ -132,16 +147,16 @@ fn build_group_frame(ga: GroupAddress, apdu_type: ApduType, data: &[u8]) -> Resu
     )?)
 }
 
-fn build_group_write(ga: GroupAddress, data: &[u8]) -> Result<CemiFrame> {
-    build_group_frame(ga, ApduType::GroupValueWrite, data)
+fn build_group_write(ga: GroupAddress, short_apdu: bool, data: &[u8]) -> Result<CemiFrame> {
+    build_group_frame(ga, ApduType::GroupValueWrite, short_apdu, data)
 }
 
 fn build_group_read(ga: GroupAddress) -> Result<CemiFrame> {
-    build_group_frame(ga, ApduType::GroupValueRead, &[])
+    build_group_frame(ga, ApduType::GroupValueRead, false, &[])
 }
 
-fn build_group_response(ga: GroupAddress, data: &[u8]) -> Result<CemiFrame> {
-    build_group_frame(ga, ApduType::GroupValueResponse, data)
+fn build_group_response(ga: GroupAddress, short_apdu: bool, data: &[u8]) -> Result<CemiFrame> {
+    build_group_frame(ga, ApduType::GroupValueResponse, short_apdu, data)
 }
 
 #[cfg(test)]
@@ -153,7 +168,7 @@ mod tests {
 
     #[test]
     fn build_group_write_short() {
-        let frame = build_group_write(GroupAddress::from_raw(0x0801), &[0x01]).unwrap();
+        let frame = build_group_write(GroupAddress::from_raw(0x0801), true, &[0x01]).unwrap();
         assert_eq!(frame.destination_address_raw(), 0x0801);
         let payload = frame.payload();
         assert_eq!(payload[0], 0x00); // TPCI
@@ -163,7 +178,7 @@ mod tests {
     #[test]
     fn build_group_write_long() {
         let data = [0x0C, 0x34]; // DPT9 temperature
-        let frame = build_group_write(GroupAddress::from_raw(0x0801), &data).unwrap();
+        let frame = build_group_write(GroupAddress::from_raw(0x0801), false, &data).unwrap();
         let payload = frame.payload();
         assert_eq!(payload[0], 0x00);
         assert_eq!(payload[1], 0x80); // GroupValueWrite
@@ -179,7 +194,7 @@ mod tests {
 
     #[test]
     fn build_group_response_short() {
-        let frame = build_group_response(GroupAddress::from_raw(0x0801), &[0x01]).unwrap();
+        let frame = build_group_response(GroupAddress::from_raw(0x0801), true, &[0x01]).unwrap();
         let payload = frame.payload();
         assert_eq!(payload[1], 0x41); // GroupValueResponse | 0x01
     }
@@ -187,12 +202,12 @@ mod tests {
     #[test]
     fn dpt_encoding_in_write() {
         let encoded = dpt::encode(DPT_SWITCH, &DptValue::Bool(true)).unwrap();
-        let frame = build_group_write(GroupAddress::from_raw(0x0802), &encoded).unwrap();
+        let frame = build_group_write(GroupAddress::from_raw(0x0802), true, &encoded).unwrap();
         let payload = frame.payload();
         assert_eq!(payload[1], 0x81); // GroupValueWrite | 1
 
         let encoded = dpt::encode(DPT_VALUE_TEMP, &DptValue::Float(21.5)).unwrap();
-        let frame = build_group_write(GroupAddress::from_raw(0x0801), &encoded).unwrap();
+        let frame = build_group_write(GroupAddress::from_raw(0x0801), false, &encoded).unwrap();
         assert_eq!(frame.payload().len(), 4); // TPCI + APCI + 2 bytes DPT9
     }
 }

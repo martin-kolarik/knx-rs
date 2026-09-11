@@ -73,13 +73,13 @@ impl Apdu {
     /// Encode the APDU into TPDU payload bytes.
     ///
     /// Returns the bytes starting from the TPCI/APCI position.
-    pub fn to_bytes(&self, tpci_bits: u8) -> Vec<u8> {
+    pub fn to_bytes(&self, tpci_bits: u8, short_apdu: bool) -> Vec<u8> {
         let apci = self.apdu_type as u16;
         let byte0 = (tpci_bits & 0xFC) | ((apci >> 8) as u8 & 0x03);
         #[expect(clippy::cast_possible_truncation)]
         let apci_low = apci as u8;
 
-        if uses_short_form(apci, &self.data) {
+        if short_apdu {
             // Short APDU: a single 6-bit value packed into the lower bits of
             // byte 1. Empty data encodes a value of 0 (the inverse of decode,
             // which always yields one data byte for the short form).
@@ -104,22 +104,6 @@ impl Apdu {
 const fn is_short_apci(apci: u16) -> bool {
     let family = apci >> APCI_FAMILY_SHIFT;
     family < APCI_SHORT_FAMILY_MAX && family != APCI_LONG_ESCAPE_FAMILY
-}
-
-/// Whether an APDU encodes in the short form (a single ≤6-bit value packed into
-/// the APCI byte).
-///
-/// Requires a short APCI and at most one data byte that fits in 6 bits — a
-/// single byte greater than [`APCI_SHORT_DATA_MASK`] (e.g. a full-octet DPT 5
-/// value) must use the long form to avoid losing its high bits.
-const fn uses_short_form(apci: u16, data: &[u8]) -> bool {
-    if !is_short_apci(apci) || data.len() > 1 {
-        return false;
-    }
-    match data.first() {
-        Some(&value) => value <= APCI_SHORT_DATA_MASK,
-        None => true,
-    }
 }
 
 /// Normalize a raw 16-bit APCI field to the value used for type identification.
@@ -296,7 +280,7 @@ mod tests {
             apdu_type: ApduType::GroupValueWrite,
             data: alloc::vec![0x01],
         };
-        let bytes = apdu.to_bytes(0x00);
+        let bytes = apdu.to_bytes(0x00, true);
         assert_eq!(bytes, &[0x00, 0x81]);
 
         let parsed = Apdu::parse(&bytes, 1).unwrap();
@@ -310,7 +294,7 @@ mod tests {
             apdu_type: ApduType::GroupValueWrite,
             data: alloc::vec![0x0C, 0x1A],
         };
-        let bytes = apdu.to_bytes(0x00);
+        let bytes = apdu.to_bytes(0x00, false);
         assert_eq!(bytes, &[0x00, 0x80, 0x0C, 0x1A]);
     }
 
@@ -360,7 +344,7 @@ mod tests {
             apdu_type: ApduType::GroupValueWrite,
             data: Vec::new(),
         };
-        let bytes = apdu.to_bytes(0x00);
+        let bytes = apdu.to_bytes(0x00, true);
         assert_eq!(bytes, &[0x00, 0x80]);
         let parsed = Apdu::parse(&bytes, 1).unwrap();
         assert_eq!(parsed.apdu_type, ApduType::GroupValueWrite);
@@ -375,7 +359,7 @@ mod tests {
             apdu_type: ApduType::GroupValueWrite,
             data: alloc::vec![0xC8],
         };
-        let bytes = apdu.to_bytes(0x00);
+        let bytes = apdu.to_bytes(0x00, false);
         assert_eq!(bytes, &[0x00, 0x80, 0xC8]);
         let parsed = Apdu::parse(&bytes, 2).unwrap();
         assert_eq!(parsed.data, &[0xC8]);

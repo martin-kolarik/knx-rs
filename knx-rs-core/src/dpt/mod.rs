@@ -67,6 +67,14 @@ impl Dpt {
         }
     }
 
+    /// If APDU is short (bits included) or long (with data bytes at the end of the packet.
+    pub const fn short_apdu(self) -> bool {
+        match self.main {
+            1 | 2 => true,
+            _ => false,
+        }
+    }
+
     /// Whether this DPT's main group has a variable wire length.
     ///
     /// DPT 28 (Unicode string) is null-terminated and has no fixed size.
